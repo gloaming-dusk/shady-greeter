@@ -1,0 +1,2 @@
+option('shady', type: 'string', value: '', description: 'The Shady compositor the greeter runs (default: shady on PATH)')
+option('shady_shell', type: 'string', value: '', description: 'The shady-shell the greeter runs (default: shady-shell on PATH)')

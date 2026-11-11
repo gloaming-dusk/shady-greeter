@@ -1,4 +1,4 @@
-# Greeter
+# shady-greeter
 
 The Shady greeter is the login screen [greetd](https://sr.ht/~kennylevinsen/greetd/)
 shows before anyone logs in: Tide before there are windows. The night sea and
@@ -6,31 +6,65 @@ the glass islands along the top edge are the desktop's, and the clock, avatar
 and password field are where Tide's lock screen has them, so logging in only
 fills in the rest.
 
-## Using it
+## Try it
 
-On NixOS, with the flake's module:
-
-```nix
-programs.shady.enable = true;
-programs.shady.greeter.enable = true;
+```sh
+nix run github:gloaming-dusk/shady-greeter
 ```
 
-`programs.shady.greeter.theme = "afterglow";` gives it Afterglow's sky and
-sea and a login card (`greeter/afterglow/`) instead; elsewhere, set
-`SHADY_GREETER_THEME=afterglow`.
+opens the login screen in a window with a fake greetd that accepts any
+non-empty password (`SHADY_GREETER_DEMO=1`).
+
+## Using it
+
+On NixOS, with this flake's module:
+
+```nix
+{
+  inputs.shady-greeter.url = "github:gloaming-dusk/shady-greeter";
+  # in your system's modules:
+  imports = [ shady-greeter.nixosModules.default ];
+  services.shady-greeter.enable = true;
+}
+```
 
 This enables greetd with `shady-greeter` as its default session, run as the
 `greeter` user, and keeps the last user and session in
-`/var/lib/shady-greeter/last`. `programs.shady.greeter.hint` adds a line at
+`/var/lib/shady-greeter/last`. `services.shady-greeter.hint` adds a line at
 the bottom of the screen, for example how to log in to a live system.
+[Gloam](https://github.com/gloaming-dusk/gloam) turns all of this on for you.
 
-Elsewhere, point greetd at the installed script:
+The greeter offers the sessions installed on the system
+(`services.displayManager.sessionPackages`); it does not install Shady's
+session itself.
+
+Elsewhere, build it with meson (it needs `shady-shell.pc` from
+[shady-shell](https://github.com/gloaming-dusk/shady-shell), and runs the
+`shady` and `shady-shell` it finds on `PATH`, or the ones given with
+`-Dshady=` and `-Dshady_shell=`) and point greetd at the installed script:
 
 ```toml
 [default_session]
 command = "shady-greeter"
 user = "greeter"
 ```
+
+### Themes
+
+`tide` is shipped here. A rice can bring a login screen of its own in a
+`greeter/` directory next to its `config.lua`, with the same three files as
+[themes/tide](themes/tide) and an optional `theme.sh` beside it for its
+colours; [Afterglow](https://github.com/gloaming-dusk/shady-rice-afterglow)
+does. `SHADY_GREETER_THEME=afterglow` picks it, from `$SHADY_RICE_PATH` or
+`$XDG_DATA_DIRS/shady/rices`. On NixOS:
+
+```nix
+services.shady-greeter.theme = "afterglow";
+services.shady-greeter.themePackages = [ shady-rice-afterglow.packages.${system}.default ];
+```
+
+A theme runs with every password typed into it, so only system directories
+are searched, never a home directory.
 
 Type the password and press Enter. Up and Down pick the user, Tab the
 session, Escape clears the field. Restart and Shut down run
@@ -40,12 +74,11 @@ session, Escape clears the field. Restart and Shut down run
 
 | | |
 |---|---|
-| `shady-greeter` (`data/shady-greeter.in`) | starts Shady with the greeter's config, `shady-shell` as its only client, and logs to the journal (`journalctl -t shady-greeter`) |
-| `greeter/config.lua` | the compositor, with no shortcuts at all, so nothing on the login screen can start programs (even the default Escape-to-quit is unbound) |
-| `greeter/init.lua` | empty; set so that no user's `init.lua` runs here |
-| `greeter/shell.lua` | the login screen: a `persistent` popup with exclusive keyboard focus, drawn with Tide's `style.lua` |
-| `greeter/afterglow/` | the same three files for the Afterglow look |
-| `greeter/src/greetd.c` | the `greetd` shell plugin: speaks greetd's IPC and lists accounts and sessions |
+| `shady-greeter` (`shady-greeter.in`) | starts Shady with the greeter's config, `shady-shell` as its only client, and logs to the journal (`journalctl -t shady-greeter`) |
+| `themes/tide/config.lua` | the compositor, with no shortcuts at all, so nothing on the login screen can start programs (even the default Escape-to-quit is unbound) |
+| `themes/tide/init.lua` | empty; set so that no user's `init.lua` runs here |
+| `themes/tide/shell.lua` | the login screen: a `persistent` popup with exclusive keyboard focus, drawn with Tide's `style.lua`, fonts and sea shader (copied here, so the greeter does not need Tide installed) |
+| `src/greetd.c` | the `greetd` shell plugin: speaks greetd's IPC and lists accounts and sessions |
 
 The login screen asks the plugin to authenticate; when greetd accepts the chosen
 session the plugin asks the compositor to quit over its IPC socket, and
@@ -93,5 +126,18 @@ non-empty password, so the greeter can run nested or headless:
 SHADY_GREETER_DEMO=1 WLR_BACKENDS=wayland shady-greeter
 ```
 
-`nix build .#checks.x86_64-linux.greeter` boots a VM to the greeter, fails a
-login, logs in and checks that the user's Shady session starts.
+`SHADY_GREETER_COMPOSITOR` and `SHADY_GREETER_SHELL` run it with another
+`shady` or `shady-shell` than the ones it was built with.
+
+## Building
+
+```sh
+nix develop
+meson setup build
+ninja -C build
+meson test -C build
+```
+
+## Licence
+
+Apache-2.0, see [LICENSE](LICENSE).

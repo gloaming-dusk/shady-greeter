@@ -8,7 +8,9 @@
 -- session, Escape clears what was typed.
 
 local HERE = (debug.getinfo(1, "S").source:match("^@(.*)/[^/]*$")) or "."
-local TIDE = HERE .. "/../rices/tide"
+-- Tide's fonts, style.lua and sea shader, kept here so the login screen
+-- looks like Tide without Tide installed.
+local TIDE = HERE
 shell.fonts(TIDE .. "/fonts")
 
 local a = shell.alpha
