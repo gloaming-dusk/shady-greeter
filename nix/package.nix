@@ -4,6 +4,7 @@
   meson,
   ninja,
   pkg-config,
+  lua5_4,
   cairo,
   shady,
   shady-shell,
@@ -26,7 +27,7 @@ stdenv.mkDerivation {
   };
 
   strictDeps = true;
-  nativeBuildInputs = [ meson ninja pkg-config ];
+  nativeBuildInputs = [ meson ninja pkg-config lua5_4 ];
   buildInputs = [ cairo shady-shell ];
 
   mesonBuildType = "release";

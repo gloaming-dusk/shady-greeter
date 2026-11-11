@@ -74,6 +74,7 @@ static struct {
     size_t in_len;
     enum request inflight;
     bool active; /* greetd holds a session for us */
+    bool cancelling; /* drain the outstanding reply before sending cancel */
     char user[64];
     char want_user[64]; /* login requested while a session was active */
     char pending[1024]; /* answer typed before the prompt arrived */
@@ -109,6 +110,31 @@ static void set_message(const char *kind, const char *text) {
 static void clear_prompt(void) {
     api->set_value(host, "greetd.prompt", "");
     api->set_value(host, "greetd.secret", "1");
+}
+
+static void clear_pending(void) {
+    wipe(g.pending, sizeof(g.pending));
+    g.has_pending = false;
+}
+
+static bool handing_off(void) {
+    const char *state = api->value(host, "greetd.state");
+    return g.inflight == REQUEST_START || (state && !strcmp(state, "done"));
+}
+
+static void connection_failed(const char *message) {
+    if (g.watch) api->watch_remove(host, g.watch);
+    g.watch = NULL;
+    if (g.fd >= 0) close(g.fd);
+    g.fd = -1;
+    g.inflight = REQUEST_NONE;
+    g.in_len = 0;
+    g.active = g.cancelling = false;
+    g.want_user[0] = '\0';
+    clear_pending();
+    clear_prompt();
+    set_message("error", message);
+    set_state("error");
 }
 
 /* ---- accounts and sessions -------------------------------------------- */
@@ -275,6 +301,9 @@ static void quit_compositor(void) {
 }
 
 static void finish(void) {
+    clear_pending();
+    clear_prompt();
+    g.active = false;
     set_state("done");
     save_last();
     if (g.demo) {
@@ -296,11 +325,11 @@ static bool send_request(enum request kind, struct json_buf *json) {
     wipe(json->data, json->cap);
     json_buf_free(json);
     if (!ok) {
-        set_message("error", "Lost the connection to greetd");
-        set_state("error");
+        connection_failed("Lost the connection to greetd");
         return false;
     }
     g.inflight = kind;
+    clear_prompt();
     set_state("busy");
     return true;
 }
@@ -326,6 +355,7 @@ static void request_respond(const char *answer) {
 }
 
 static void request_cancel(void) {
+    g.cancelling = true;
     struct json_buf json = {0};
     json_puts(&json, "{\"type\":\"cancel_session\"}");
     send_request(REQUEST_CANCEL, &json);
@@ -355,12 +385,14 @@ static void answer_or_prompt(const char *type, const char *text) {
         request_respond(NULL);
         return;
     }
-    if (g.has_pending) {
+    if (g.has_pending && !strcmp(type, "secret")) {
         request_respond(g.pending);
-        wipe(g.pending, sizeof(g.pending));
-        g.has_pending = false;
+        clear_pending();
         return;
     }
+    /* Pre-entered text is a password, never an answer to an echo-on prompt.
+     * Discard it rather than reusing it for a later question. */
+    clear_pending();
     api->set_value(host, "greetd.prompt", text);
     api->set_value(host, "greetd.secret", strcmp(type, "visible") ? "1" : "0");
     set_state("prompt");
@@ -377,23 +409,41 @@ static void handle_response(const struct json_object *msg) {
     snprintf(line, sizeof(line), "<- %s%s%s", type, detail ? " " : "", detail ? detail : "");
     api->log(host, line);
 
+    if (was == REQUEST_NONE) return;
     if (was == REQUEST_CANCEL) {
+        if (strcmp(type, "success")) {
+            connection_failed("greetd could not cancel the session");
+            return;
+        }
         g.active = false;
+        g.cancelling = false;
+        clear_prompt();
         if (g.want_user[0]) {
             char user[sizeof(g.want_user)];
             snprintf(user, sizeof(user), "%s", g.want_user);
             g.want_user[0] = '\0';
             request_create(user);
         } else {
+            clear_pending();
             const char *kind = api->value(host, "greetd.message_kind");
             set_state(kind && !strcmp(kind, "error") ? "error" : "idle");
         }
         return;
     }
+    if (g.cancelling) {
+        /* This reply belongs to the abandoned user. In particular, success
+         * must not start a session, and a prompt must not consume the next
+         * user's pending password. */
+        request_cancel();
+        return;
+    }
     if (!strcmp(type, "success")) {
         if (was == REQUEST_START) finish();
-        else request_start();
-    } else if (!strcmp(type, "auth_message")) {
+        else {
+            clear_pending();
+            request_start();
+        }
+    } else if (!strcmp(type, "auth_message") && was != REQUEST_START) {
         const char *kind = json_get_string(msg, "auth_message_type");
         const char *text = json_get_string(msg, "auth_message");
         answer_or_prompt(kind ? kind : "secret", text ? text : "");
@@ -404,8 +454,7 @@ static void handle_response(const struct json_object *msg) {
         if (kind && !strcmp(kind, "auth_error")) text = "Wrong password";
         set_message("error", text && *text ? text : "Login failed");
         clear_prompt();
-        wipe(g.pending, sizeof(g.pending));
-        g.has_pending = false;
+        clear_pending();
         request_cancel();
     }
 }
@@ -443,17 +492,13 @@ static void readable(int fd, short revents, void *data) {
             if (json_parse_object(text, &msg, &error)) handle_response(&msg);
             else logf_("bad greetd message: %s", error);
             free(text);
+            if (g.fd < 0) return;
         }
         memmove(g.in, g.in + 4 + len, g.in_len - 4 - len);
         g.in_len -= 4 + (size_t)len;
     }
     if (revents & (POLLHUP | POLLERR)) {
-        api->watch_remove(host, g.watch);
-        g.watch = NULL;
-        close(fd);
-        g.fd = -1;
-        set_message("error", "greetd closed the connection");
-        set_state("error");
+        connection_failed("greetd closed the connection");
     }
 }
 
@@ -467,8 +512,7 @@ static void demo_login(void) {
         return;
     }
     bool ok = g.pending[0] != '\0';
-    wipe(g.pending, sizeof(g.pending));
-    g.has_pending = false;
+    clear_pending();
     if (ok) finish();
     else {
         set_message("error", "Wrong password");
@@ -480,6 +524,7 @@ static void demo_login(void) {
 
 static void action_session(const char *id, void *data) {
     (void)data;
+    if (handing_off()) return;
     for (size_t i = 0; i < g.session_count; i++) {
         if (!strcmp(g.sessions[i].id, id)) {
             g.session = (int)i;
@@ -491,23 +536,25 @@ static void action_session(const char *id, void *data) {
 
 static void action_login(const char *user, void *data) {
     (void)data;
-    if (!*user) return;
+    if (!*user || handing_off()) return;
+    clear_pending();
     set_message("info", "");
     clear_prompt();
     if (g.demo) {
         snprintf(g.user, sizeof(g.user), "%s", user);
+        g.active = true;
         demo_login();
         return;
     }
     if (g.fd < 0) {
-        set_message("error", "greetd is not running (GREETD_SOCK is unset)");
-        set_state("error");
+        connection_failed("greetd is not running (GREETD_SOCK is unset)");
         return;
     }
-    if (g.inflight != REQUEST_NONE) return;
     if (g.active) {
         snprintf(g.want_user, sizeof(g.want_user), "%s", user);
-        request_cancel();
+        g.cancelling = true;
+        if (g.inflight == REQUEST_NONE) request_cancel();
+        else set_state("busy");
     } else {
         request_create(user);
     }
@@ -516,9 +563,14 @@ static void action_login(const char *user, void *data) {
 static void action_respond(const char *answer, void *data) {
     (void)data;
     const char *state = api->value(host, "greetd.state");
+    if (!g.active || handing_off() || (state && !strcmp(state, "error"))) return;
+    if (g.cancelling && !g.want_user[0]) return;
     bool prompting = state && !strcmp(state, "prompt");
     if (!prompting || g.inflight != REQUEST_NONE) {
-        /* The prompt has not arrived yet: keep the answer for it. */
+        /* Only queue for a new authentication attempt, never for another
+         * outstanding response or a cancelled attempt. */
+        if (!g.demo && !g.want_user[0] && g.inflight != REQUEST_CREATE) return;
+        clear_pending();
         snprintf(g.pending, sizeof(g.pending), "%s", answer);
         g.has_pending = true;
         if (g.demo && prompting) demo_login();
@@ -536,12 +588,21 @@ static void action_respond(const char *answer, void *data) {
 static void action_cancel(const char *argument, void *data) {
     (void)argument;
     (void)data;
-    wipe(g.pending, sizeof(g.pending));
-    g.has_pending = false;
+    /* start_session commits the handoff. Do not present an idle screen or
+     * accept another user while greetd is acknowledging that request. */
+    if (handing_off()) return;
+    clear_pending();
+    g.want_user[0] = '\0';
     set_message("info", "");
     clear_prompt();
-    if (!g.demo && g.active && g.inflight == REQUEST_NONE) request_cancel();
-    else set_state("idle");
+    if (!g.demo && g.active) {
+        g.cancelling = true;
+        if (g.inflight == REQUEST_NONE) request_cancel();
+        else set_state("busy");
+    } else {
+        g.active = false;
+        set_state("idle");
+    }
 }
 
 /* ---- plugin ----------------------------------------------------------- */

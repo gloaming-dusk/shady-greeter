@@ -30,6 +30,12 @@ greetd_plugin_test = executable('greetd-plugin-test',
   install: false)
 test('greetd-plugin', greetd_plugin_test)
 
+lua = find_program('lua5.4', 'lua', required: false)
+if lua.found()
+  test('greeter-ui', lua,
+    args: [files('tests/greeter-ui-test.lua'), meson.current_source_dir()])
+endif
+
 install_subdir('themes/tide', install_dir: theme_install_dir)
 
 # The compositor and shell the launcher runs; by default the ones on PATH

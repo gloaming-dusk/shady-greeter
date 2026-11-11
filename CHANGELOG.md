@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Cancel authentication safely while greetd is replying, keeping replacement
+  users' passwords out of abandoned conversations. User and session selection
+  wait during authentication and session handoff.
+- Clear prompts and pending passwords on connection errors. Public PAM prompts
+  require fresh input instead of consuming a pre-entered password, and input
+  is hidden outside an active public prompt.
+
 - The greeter has its own repository, moved out of
   [Shady](https://github.com/gloaming-dusk/shady) with its history. It builds
   against [shady-shell](https://github.com/gloaming-dusk/shady-shell)'s

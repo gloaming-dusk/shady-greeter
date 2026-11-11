@@ -108,8 +108,13 @@ Actions (run with `shell.action`):
 |---|---|
 | `greetd.session(id)` | the session to start once authenticated |
 | `greetd.login(user)` | start authenticating `user` |
-| `greetd.respond(text)` | answer PAM; an answer given before the question arrives is kept for it, so `login` and `respond` together need a single Enter |
+| `greetd.respond(text)` | answer PAM; a password given before the question arrives is kept for a secret prompt, so `login` and `respond` together need a single Enter; a visible prompt discards it and asks for fresh input |
 | `greetd.cancel()` | give up the current attempt |
+
+Cancellation waits for any outstanding reply, then for greetd to confirm the
+cancel. A replacement login and its password belong to the new user throughout
+that wait. Once `start_session` has been sent, the handoff is committed: further
+login and cancel actions leave the screen busy until the session is accepted.
 
 Sessions come from the colon-separated directories in
 `SHADY_GREETER_SESSIONS` (by default `/run/current-system/sw/share/wayland-sessions`,

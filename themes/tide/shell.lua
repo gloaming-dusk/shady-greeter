@@ -61,8 +61,10 @@ local function selection()
 end
 
 local function state() return shell.value("greetd.state", "idle") end
+local function busy() return state() == "busy" or state() == "done" end
 
 local function submit()
+    if busy() then return end
     local person, kind = selection()
     if not person then return end
     if state() == "prompt" and shell.value("greetd.prompt", "") ~= "" and login.started then
@@ -81,6 +83,7 @@ local function cycle(field, list, step)
 end
 
 local function choose_user(index)
+    if busy() then return end
     login.user, login.typed, login.started = index, "", false
     shell.action("greetd.cancel")
     shell.redraw()
@@ -89,6 +92,9 @@ end
 -- A failed attempt shakes the field.
 local last_message = ""
 shell.on("value", function(k, v)
+    if k == "greetd.state" and (v == "error" or v == "idle" or v == "done") then
+        login.typed, login.started = "", false
+    end
     if k == "greetd.message" and v and v ~= last_message then
         last_message = v
         if shell.value("greetd.message_kind", "info") == "error" then login.shake = login.shake + 1 end
@@ -121,6 +127,7 @@ local function session_island(ctx, kind)
     local hovered = ctx.hovered == "session"
     return island {
         id = "session", gap = 8, on_click = function()
+            if busy() then return end
             cycle("session", sessions(), 1)
             shell.redraw()
         end,
@@ -198,7 +205,7 @@ shell.popup {
     view = function(ctx)
         local person, kind, people = selection()
         local current = state()
-        local secret = shell.value("greetd.secret", "1") == "1"
+        local secret = current ~= "prompt" or shell.value("greetd.secret", "1") ~= "0"
         local failed = shell.value("greetd.message_kind", "info") == "error"
         local message = shell.value("greetd.message", "")
         local centered = login.typed ~= "" and secret or current == "busy" or current == "done"
